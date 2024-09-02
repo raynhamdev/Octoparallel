@@ -1,6 +1,8 @@
 ﻿// See https://aka.ms/new-console-template for more information
 
-
+var execution = new Execution();
+await execution.Start(2);
+Console.WriteLine("DONE");
 
 class OctoParallel
 {
@@ -110,7 +112,7 @@ class ControllerBase
 
     public async Task ExecuteBase(int maxParallelism)
     {
-        await OctoParallel.Execute(maxParallelism);
+        await OctoParallel.Execute2(maxParallelism);
     }
 
     public async Task PreExecute(Func<Guid, Action, WorkItem> workItemFactory)
