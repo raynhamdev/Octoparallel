@@ -57,13 +57,17 @@ namespace Octoparallel
     public class ProceduralWorkItem : IWorkItem
     {
         private readonly Guid itemId;
+        private readonly string label;
         private readonly Func<Task> action;
         private readonly List<IMessage> sideEffects = new List<IMessage>();
-        private bool started = false;
 
-        public ProceduralWorkItem(Func<Task> action)
+        public static ProceduralWorkItem Create(string label, Func<Task> action)
+            => new ProceduralWorkItem(label, action);
+
+        public ProceduralWorkItem(string label, Func<Task> action)
         {
             this.itemId = Guid.NewGuid();
+            this.label = label;
             this.action = action;
         }
 
@@ -71,6 +75,7 @@ namespace Octoparallel
 
         public async Task Execute()
         {
+            Console.WriteLine($"Executing work item {label}.");
             await this.action();
             this.State = WorkItemState.Completed;
         }
@@ -79,14 +84,26 @@ namespace Octoparallel
     public class EventDrivenWorkItem : IWorkItem
     {
         private readonly Guid itemId;
+        private readonly string label;
         private readonly Func<Task> action;
         private readonly List<IMessage> sideEffects = new List<IMessage>();
         private bool started = false;
 
-        public EventDrivenWorkItem(Func<Task> action)
+        public EventDrivenWorkItem(Guid id, string label, Func<Task> action)
         {
+            this.itemId = id;
+            this.label = label;
             this.action = action;
         }
+
+        public static EventDrivenWorkItem Create(string text) =>
+            new EventDrivenWorkItem(
+                Guid.NewGuid(),
+                text,
+                async () => {
+                    await Task.CompletedTask;
+                    Console.WriteLine(text);
+                });
 
         public WorkItemState State { get; private set; }
 
@@ -100,6 +117,7 @@ namespace Octoparallel
 
         public async Task Execute()
         {
+            Console.WriteLine($"Executing work item {label}.");
             await Task.CompletedTask;
             this.sideEffects.Add(new StartSideEffect(this.itemId));
             this.State = WorkItemState.Executing;
@@ -112,6 +130,7 @@ namespace Octoparallel
                 return;
             }
 
+            Console.WriteLine($"Handling started event for work item {label}.");
             sideEffects.Add(new FinishSideEffect(this.itemId));
         }
 
@@ -122,6 +141,7 @@ namespace Octoparallel
                 return;
             }
 
+            Console.WriteLine($"Handling finished event for work item {label}.");
             await this.action();
             this.State = WorkItemState.Completed;
         }
@@ -129,21 +149,24 @@ namespace Octoparallel
 
     public class Slot
     {
+        private readonly int slotNumber;
         private readonly List<IWorkItem> executedItems;
         private IWorkItem? currentItem;
 
         public WorkItemState State { get; private set; }
 
-        public static Slot Create() => new Slot(null, new List<IWorkItem>());
+        public static Slot Create(int index) => new Slot(index, null, new List<IWorkItem>());
 
-        private Slot(IWorkItem? currentItem, List<IWorkItem> executedItems)
+        private Slot(int slotNumber, IWorkItem? currentItem, List<IWorkItem> executedItems)
         {
+            this.slotNumber = slotNumber;
             this.currentItem = currentItem;
             this.executedItems = executedItems;
         }
 
         public async Task Execute(ConcurrentQueue<IWorkItem> items)
         {
+            Console.WriteLine($"Executing slot {slotNumber} (start)");
             this.State = WorkItemState.Executing;
 
             if (currentItem is not null)
@@ -154,6 +177,7 @@ namespace Octoparallel
                 }
                 else
                 {
+                    Console.WriteLine($"Executing slot {slotNumber} (finish - incomplete)");
                     return;
                 }
             }
@@ -167,10 +191,12 @@ namespace Octoparallel
                 }
                 else
                 {
+                    Console.WriteLine($"Executing slot {slotNumber} (finish - incomplete)");
                     return;
                 }
             }
 
+            Console.WriteLine($"Executing slot {slotNumber} (finish - complete)");
             this.State = WorkItemState.Completed;
         }
     }
@@ -191,8 +217,8 @@ namespace Octoparallel
             }
 
             var slots = Enumerable
-                .Range(0, maxParallelism)
-                .Select(i => Slot.Create())
+                .Range(1, maxParallelism)
+                .Select(i => Slot.Create(i))
                 .ToList();
 
             return new ParallelForeach(slots, queue);
@@ -206,6 +232,7 @@ namespace Octoparallel
 
         public async Task Execute()
         {
+            Console.WriteLine("Executing ParallelForeach");
             await Task.WhenAll(slots.Select(s => s.Execute(items)));
             this.State = slots.Any(s => s.State == WorkItemState.Executing)
                 ? WorkItemState.Executing
@@ -230,7 +257,9 @@ namespace Octoparallel
             {
                 await parallelForeach.Execute();
 
-                var sideEffects = workItems.SelectMany(item => item.ConsumeSideEffects());
+                var sideEffects = workItems.SelectMany(item => item.ConsumeSideEffects()).ToList();
+
+                Console.WriteLine($"Consuming {sideEffects.Count()} side-effects.");
                 var events = sideEffects.Select(s => this.integrator.HandleSideEffect(s));
                 // TODO: dispatch events of any type.
                 foreach (var fact in events.OfType<StartedEvent>())
